@@ -285,7 +285,7 @@ class RallyService : AccessibilityService() {
             view.isSelected = active
         }
         status?.text = "F$selected • Auto ${if (targetAutoArmed) "ON" else "OFF"}"
-        if (collapsed) collapseControl?.text = "F$selected ▣"
+        if (collapsed) collapseControl?.text = "F$selected"
     }
 
     private fun updateCollapsed() {
