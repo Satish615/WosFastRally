@@ -23,7 +23,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import kotlin.math.roundToInt
 
-/** v0.6: opt-in screenshot latency + accessible-title diagnostics; no auto taps. */
+/** v0.7: on-device title-reference matching diagnostics; no automatic taps. */
 class RallyService : AccessibilityService() {
     private var wm: WindowManager? = null
     private var panel: LinearLayout? = null
@@ -38,6 +38,9 @@ class RallyService : AccessibilityService() {
     private var detectionArmed = false
     private var lastProbeMs = 0L
     private var detectionButton: TextView? = null
+    private var referenceButton: TextView? = null
+    private var referencePixels: IntArray? = null
+    private var lastMatchScore = 0f
     private val mainHandler = Handler(Looper.getMainLooper())
     private var observedPackage: String? = null
     private var selected = 7
@@ -55,6 +58,7 @@ class RallyService : AccessibilityService() {
         selected = prefs.getInt("activeFormation", 7).takeIf { it in 5..7 } ?: 7
         collapsed = prefs.getBoolean("collapsed", false)
         detectionArmed = false
+        referencePixels = loadReference()
         if (!Settings.canDrawOverlays(this)) {
             Log.w("WosFastRally", "Overlay permission missing")
             return
@@ -174,6 +178,17 @@ class RallyService : AccessibilityService() {
         detectionButton = detection
         body.addView(detection, LinearLayout.LayoutParams(-1, dp(36)).apply { topMargin = dp(5) })
         detection.text = "DETECT: OFF"
+        val reference = TextView(this).apply {
+            text = "SAVE DEPLOY TITLE REFERENCE"
+            textSize = 11f
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = background(Color.rgb(70, 82, 94))
+            isClickable = true
+            setOnClickListener { captureTitleReference() }
+        }
+        referenceButton = reference
+        body.addView(reference, LinearLayout.LayoutParams(-1, dp(36)).apply { topMargin = dp(5) })
         refreshSelection()
         updateCollapsed()
         val windowParams = WindowManager.LayoutParams(
@@ -339,6 +354,75 @@ class RallyService : AccessibilityService() {
         Log.i("WosFastRally", "Detected packages: $packages")
     }
 
+    // Fixed-size normalized crop of the top-left title, excluding the back arrow.
+    // A reference must be captured on this device on the actual Deploy-title screen.
+    private fun titleSamples(bitmap: android.graphics.Bitmap): IntArray {
+        val result = IntArray(32 * 12)
+        for (y in 0 until 12) for (x in 0 until 32) {
+            val px = ((0.125f + (x + 0.5f) / 32f * 0.29f) * bitmap.width)
+                .toInt().coerceIn(0, bitmap.width - 1)
+            val py = ((0.039f + (y + 0.5f) / 12f * 0.047f) * bitmap.height)
+                .toInt().coerceIn(0, bitmap.height - 1)
+            result[y * 32 + x] = bitmap.getPixel(px, py) and 0x00ffffff
+        }
+        return result
+    }
+
+    private fun compareTitle(reference: IntArray, current: IntArray): Float {
+        if (reference.size != current.size) return 0f
+        var difference = 0L
+        for (i in reference.indices) {
+            val a = reference[i]
+            val b = current[i]
+            difference += kotlin.math.abs((a shr 16 and 255) - (b shr 16 and 255))
+            difference += kotlin.math.abs((a shr 8 and 255) - (b shr 8 and 255))
+            difference += kotlin.math.abs((a and 255) - (b and 255))
+        }
+        return 1f - difference.toFloat() / (reference.size * 765f)
+    }
+
+    private fun loadReference(): IntArray? {
+        val encoded = getSharedPreferences("config", MODE_PRIVATE)
+            .getString("deployTitleReference", null) ?: return null
+        return try {
+            encoded.split(",").map { it.toInt() }.toIntArray()
+                .takeIf { it.size == 32 * 12 }
+        } catch (_: Exception) { null }
+    }
+
+    private fun captureTitleReference() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R ||
+            rootInActiveWindow?.packageName?.toString() != "com.gof.global") {
+            status?.text = "Open WOS Deploy-title screen first"
+            return
+        }
+        try {
+            takeScreenshot(android.view.Display.DEFAULT_DISPLAY, mainExecutor,
+                object : TakeScreenshotCallback {
+                    override fun onSuccess(result: ScreenshotResult) {
+                        try {
+                            val bitmap = android.graphics.Bitmap.wrapHardwareBuffer(
+                                result.hardwareBuffer, result.colorSpace)
+                            if (bitmap == null) {
+                                status?.text = "Reference capture unavailable"
+                                return
+                            }
+                            val pixels = titleSamples(bitmap)
+                            referencePixels = pixels
+                            getSharedPreferences("config", MODE_PRIVATE).edit()
+                                .putString("deployTitleReference", pixels.joinToString(",")).apply()
+                            status?.text = "Reference saved (confirm title was Deploy)"
+                        } finally { result.hardwareBuffer.close() }
+                    }
+                    override fun onFailure(errorCode: Int) {
+                        status?.text = "Reference screenshot failed: $errorCode"
+                    }
+                })
+        } catch (e: Exception) {
+            status?.text = "Reference failed: ${e.javaClass.simpleName}"
+        }
+    }
+
     private fun probeFormation(trigger: String) {
         if (!detectionArmed || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
         val now = SystemClock.elapsedRealtime()
@@ -374,7 +458,14 @@ class RallyService : AccessibilityService() {
                             val elapsed = (SystemClock.elapsedRealtimeNanos() - started) / 1_000_000
                             val dimensions = if (bitmap == null) "unavailable"
                                 else "${bitmap.width}x${bitmap.height}"
-                            status?.text = "Capture ${elapsed}ms (${dimensions}); title accessible: ${titleExposed}"
+                            val reference = referencePixels
+                            val score = if (bitmap != null && reference != null)
+                                compareTitle(reference, titleSamples(bitmap)) else null
+                            if (score != null) lastMatchScore = score
+                            status?.text = if (score == null)
+                                "Capture ${elapsed}ms; title accessible: ${titleExposed}; no reference"
+                            else "Capture ${elapsed}ms; title match ${(score * 100).toInt()}%; accessible: ${titleExposed}"
+                            // No gestures: a high similarity score alone is not validated screen identity.
                             Log.i("WosFastRally", "v0.6 trigger=${trigger} screenshotMs=${elapsed} titleAccessible=${titleExposed} labels=${labels.size}")
                         } finally { buffer.close() }
                     }
@@ -413,6 +504,7 @@ class RallyService : AccessibilityService() {
         bodyPanel = null
         collapseControl = null
         detectionButton = null
+        referenceButton = null
         detectionArmed = false
     }
     override fun onDestroy() { removePanel(); super.onDestroy() }
