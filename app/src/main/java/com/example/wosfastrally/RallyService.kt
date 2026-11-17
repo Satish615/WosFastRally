@@ -31,6 +31,7 @@ class RallyService : AccessibilityService() {
     private var status: TextView? = null
     private var bodyPanel: LinearLayout? = null
     private var collapseControl: TextView? = null
+    private var dragHandle: TextView? = null
     private var collapsed = false
     private var detectionArmed = false
     private var targetAutoArmed = false
@@ -102,6 +103,7 @@ class RallyService : AccessibilityService() {
         }
         header.addView(toggle, LinearLayout.LayoutParams(dp(34), dp(28)))
         collapseControl = toggle
+        dragHandle = handle
         root.addView(header)
         val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         bodyPanel = body
@@ -199,7 +201,7 @@ class RallyService : AccessibilityService() {
         refreshSelection()
         updateCollapsed()
         val windowParams = WindowManager.LayoutParams(
-            dp(170),
+            dp(if (collapsed) 44 else 170),
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
@@ -234,7 +236,44 @@ class RallyService : AccessibilityService() {
                 else -> false
             }
         }
-        try { wm?.addView(root, windowParams); panel = root }
+        var squareDownX = 0f
+        var squareDownY = 0f
+        var squareStartX = 0
+        var squareStartY = 0
+        var squareDragged = false
+        toggle.setOnTouchListener { v, event ->
+            if (!collapsed) return@setOnTouchListener false
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    squareDownX = event.rawX
+                    squareDownY = event.rawY
+                    squareStartX = windowParams.x
+                    squareStartY = windowParams.y
+                    squareDragged = false
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (kotlin.math.abs(event.rawX - squareDownX) > dp(7) ||
+                        kotlin.math.abs(event.rawY - squareDownY) > dp(7)) squareDragged = true
+                    if (squareDragged) {
+                        windowParams.x = (squareStartX + event.rawX - squareDownX).roundToInt().coerceAtLeast(0)
+                        windowParams.y = (squareStartY + event.rawY - squareDownY).roundToInt().coerceAtLeast(0)
+                        wm?.updateViewLayout(root, windowParams)
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (squareDragged) {
+                        prefs.edit().putInt("overlayX", windowParams.x)
+                            .putInt("overlayY", windowParams.y).apply()
+                    } else v.performClick()
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> true
+                else -> false
+            }
+        }
+        try { wm?.addView(root, windowParams); panel = root; updateCollapsed() }
         catch (e: Exception) { Log.e("WosFastRally", "Unable to add overlay", e) }
     }
 
@@ -251,9 +290,22 @@ class RallyService : AccessibilityService() {
 
     private fun updateCollapsed() {
         bodyPanel?.visibility = if (collapsed) View.GONE else View.VISIBLE
-        collapseControl?.text = if (collapsed) "F$selected ▣" else "−"
-        collapseControl?.contentDescription = if (collapsed) "Expand overlay, F$selected"
-            else "Collapse overlay"
+        dragHandle?.visibility = if (collapsed) View.GONE else View.VISIBLE
+        collapseControl?.apply {
+            text = if (collapsed) "F$selected" else "−"
+            textSize = if (collapsed) 15f else 14f
+            contentDescription = if (collapsed) "Expand overlay, F$selected" else "Collapse overlay"
+            layoutParams = (layoutParams as LinearLayout.LayoutParams).apply {
+                width = dp(if (collapsed) 38 else 34)
+                height = dp(if (collapsed) 38 else 28)
+            }
+        }
+        params?.let { p ->
+            p.width = dp(if (collapsed) 44 else 170)
+            panel?.let { view ->
+                try { wm?.updateViewLayout(view, p) } catch (_: Exception) {}
+            }
+        }
     }
 
     private data class DeployTiming(val screenshotStartNs: Long, val screenshotEndNs: Long, val matchEndNs: Long)
@@ -522,6 +574,7 @@ class RallyService : AccessibilityService() {
         status = null
         bodyPanel = null
         collapseControl = null
+        dragHandle = null
         referenceButton = null
         detectionArmed = false
         targetAutoArmed = false
