@@ -21,7 +21,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import kotlin.math.roundToInt
 
-/** v0.3.2: confirm com.gof.global before manual preset test. No Deploy. */
+/** v0.4: explicit manual select + Deploy test with 100 ms inter-gesture delay. */
 class RallyService : AccessibilityService() {
     private var wm: WindowManager? = null
     private var panel: LinearLayout? = null
@@ -29,6 +29,7 @@ class RallyService : AccessibilityService() {
     private val slotViews = mutableMapOf<Int, TextView>()
     private var status: TextView? = null
     private var testButton: TextView? = null
+    private var deployButton: TextView? = null
     private var observedPackage: String? = null
     private var selected = 7
     private var lastEventMs = 0L
@@ -96,6 +97,18 @@ class RallyService : AccessibilityService() {
         }
         root.addView(test, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(6) })
         testButton = test
+        val deploy = TextView(this).apply {
+            text = "SELECT + DEPLOY (100 ms)"
+            textSize = 13f
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+            background = background(Color.rgb(132, 80, 35))
+            isClickable = true
+            setOnClickListener { selectAndDeploy() }
+        }
+        root.addView(deploy, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(6) })
+        deployButton = deploy
         val diagnostics = TextView(this).apply {
             text = "SHOW detected packages"
             textSize = 12f
@@ -163,7 +176,7 @@ class RallyService : AccessibilityService() {
             view.isSelected = active
         }
         testButton?.text = "TEST F$selected preset tap"
-        status?.text = "F$selected • manual test only • no Deploy"
+        status?.text = "F$selected • explicit Deploy only"
     }
 
     private fun testPresetTap() {
@@ -204,6 +217,55 @@ class RallyService : AccessibilityService() {
         }
     }
 
+    private fun selectAndDeploy() {
+        if (testing) return
+        // User must explicitly tap SELECT + DEPLOY while the formation screen is visible.
+        // This is not an automatic screen detector.
+        if ("com.gof.global" !in detectedPackages()) {
+            status?.text = "WOS not detected; no taps sent"
+            return
+        }
+        val width = resources.displayMetrics.widthPixels.toFloat()
+        val height = resources.displayMetrics.heightPixels.toFloat()
+        val formation = selected
+        testing = true
+        status?.text = "Selecting F$formation..."
+        sendTap(width * when (formation) { 5 -> 0.50f; 6 -> 0.60f; else -> 0.705f },
+            height * 0.119f, onSuccess = {
+                // Delay starts only after Android reports the formation gesture completed.
+                Handler(Looper.getMainLooper()).postDelayed({
+                    if ("com.gof.global" !in detectedPackages()) {
+                        testing = false
+                        status?.text = "Game not detected; Deploy cancelled"
+                        return@postDelayed
+                    }
+                    status?.text = "Sending Deploy..."
+                    sendTap(width * 0.76f, height * 0.95f, onSuccess = {
+                        testing = false
+                        status?.text = "F$formation + Deploy gestures completed"
+                    }, onFailure = {
+                        testing = false
+                        status?.text = "Deploy gesture cancelled/rejected"
+                    })
+                }, 100L)
+            }, onFailure = {
+                testing = false
+                status?.text = "Formation gesture failed; Deploy skipped"
+            })
+    }
+
+    private fun sendTap(x: Float, y: Float, onSuccess: () -> Unit, onFailure: () -> Unit) {
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(
+                Path().apply { moveTo(x, y) }, 0L, 65L))
+            .build()
+        val accepted = dispatchGesture(gesture, object : GestureResultCallback() {
+            override fun onCompleted(gestureDescription: GestureDescription?) = onSuccess()
+            override fun onCancelled(gestureDescription: GestureDescription?) = onFailure()
+        }, Handler(Looper.getMainLooper()))
+        if (!accepted) onFailure()
+    }
+
     private fun detectedPackages(): Set<String> {
         val found = linkedSetOf<String>()
         rootInActiveWindow?.packageName?.toString()?.takeIf { it.isNotBlank() }?.let(found::add)
@@ -236,6 +298,7 @@ class RallyService : AccessibilityService() {
         slotViews.clear()
         status = null
         testButton = null
+        deployButton = null
     }
     override fun onDestroy() { removePanel(); super.onDestroy() }
 }
