@@ -41,6 +41,7 @@ class RallyService : AccessibilityService() {
     private var referenceButton: TextView? = null
     private var referencePixels: IntArray? = null
     private var targetPixels: IntArray? = null
+    private var targetReferenceButton: TextView? = null
     private var lastMatchScore = 0f
     private val mainHandler = Handler(Looper.getMainLooper())
     private var observedPackage: String? = null
@@ -200,7 +201,9 @@ class RallyService : AccessibilityService() {
             isClickable = true
             setOnClickListener { captureTargetReference() }
         }
+        targetReferenceButton = targetReference
         body.addView(targetReference, LinearLayout.LayoutParams(-1, dp(36)).apply { topMargin = dp(5) })
+        updateTargetReferenceIndicator()
         refreshSelection()
         updateCollapsed()
         val windowParams = WindowManager.LayoutParams(
@@ -402,6 +405,15 @@ class RallyService : AccessibilityService() {
         } catch (_: Exception) { null }
     }
 
+    private fun updateTargetReferenceIndicator() {
+        targetReferenceButton?.text = if (targetPixels != null)
+            "TARGET REFERENCE: SAVED ✓ (tap to replace)"
+        else "TARGET REFERENCE: NOT SAVED (tap to save)"
+        targetReferenceButton?.background = background(
+            if (targetPixels != null) Color.rgb(22, 117, 72)
+            else Color.rgb(70, 82, 94))
+    }
+
     private fun loadTargetReference(): IntArray? {
         val encoded = getSharedPreferences("config", MODE_PRIVATE)
             .getString("targetTitleReference", null) ?: return null
@@ -430,6 +442,7 @@ class RallyService : AccessibilityService() {
                             }
                             val pixels = titleSamples(bitmap)
                             targetPixels = pixels
+                            updateTargetReferenceIndicator()
                             getSharedPreferences("config", MODE_PRIVATE).edit()
                                 .putString("targetTitleReference", pixels.joinToString(",")).apply()
                             status?.text = "Target reference saved; test other screens with DETECT ON"
@@ -562,6 +575,7 @@ class RallyService : AccessibilityService() {
         collapseControl = null
         detectionButton = null
         referenceButton = null
+        targetReferenceButton = null
         detectionArmed = false
     }
     override fun onDestroy() { removePanel(); super.onDestroy() }
