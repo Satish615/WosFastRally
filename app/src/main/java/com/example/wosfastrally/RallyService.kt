@@ -23,7 +23,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import kotlin.math.roundToInt
 
-/** v0.7: on-device title-reference matching diagnostics; no automatic taps. */
+/** v0.8: Target-title matching diagnostics, no automatic taps. */
 class RallyService : AccessibilityService() {
     private var wm: WindowManager? = null
     private var panel: LinearLayout? = null
@@ -40,6 +40,7 @@ class RallyService : AccessibilityService() {
     private var detectionButton: TextView? = null
     private var referenceButton: TextView? = null
     private var referencePixels: IntArray? = null
+    private var targetPixels: IntArray? = null
     private var lastMatchScore = 0f
     private val mainHandler = Handler(Looper.getMainLooper())
     private var observedPackage: String? = null
@@ -59,6 +60,7 @@ class RallyService : AccessibilityService() {
         collapsed = prefs.getBoolean("collapsed", false)
         detectionArmed = false
         referencePixels = loadReference()
+        targetPixels = loadTargetReference()
         if (!Settings.canDrawOverlays(this)) {
             Log.w("WosFastRally", "Overlay permission missing")
             return
@@ -189,6 +191,16 @@ class RallyService : AccessibilityService() {
         }
         referenceButton = reference
         body.addView(reference, LinearLayout.LayoutParams(-1, dp(36)).apply { topMargin = dp(5) })
+        val targetReference = TextView(this).apply {
+            text = "SAVE TARGET TITLE REFERENCE"
+            textSize = 11f
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = background(Color.rgb(70, 82, 94))
+            isClickable = true
+            setOnClickListener { captureTargetReference() }
+        }
+        body.addView(targetReference, LinearLayout.LayoutParams(-1, dp(36)).apply { topMargin = dp(5) })
         refreshSelection()
         updateCollapsed()
         val windowParams = WindowManager.LayoutParams(
@@ -390,6 +402,48 @@ class RallyService : AccessibilityService() {
         } catch (_: Exception) { null }
     }
 
+    private fun loadTargetReference(): IntArray? {
+        val encoded = getSharedPreferences("config", MODE_PRIVATE)
+            .getString("targetTitleReference", null) ?: return null
+        return try {
+            encoded.split(",").map { it.toInt() }.toIntArray()
+                .takeIf { it.size == 32 * 12 }
+        } catch (_: Exception) { null }
+    }
+
+    private fun captureTargetReference() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R ||
+            rootInActiveWindow?.packageName?.toString() != "com.gof.global") {
+            status?.text = "Open WOS Target screen first"
+            return
+        }
+        try {
+            takeScreenshot(android.view.Display.DEFAULT_DISPLAY, mainExecutor,
+                object : TakeScreenshotCallback {
+                    override fun onSuccess(result: ScreenshotResult) {
+                        try {
+                            val bitmap = android.graphics.Bitmap.wrapHardwareBuffer(
+                                result.hardwareBuffer, result.colorSpace)
+                            if (bitmap == null) {
+                                status?.text = "Target reference unavailable"
+                                return
+                            }
+                            val pixels = titleSamples(bitmap)
+                            targetPixels = pixels
+                            getSharedPreferences("config", MODE_PRIVATE).edit()
+                                .putString("targetTitleReference", pixels.joinToString(",")).apply()
+                            status?.text = "Target reference saved; test other screens with DETECT ON"
+                        } finally { result.hardwareBuffer.close() }
+                    }
+                    override fun onFailure(errorCode: Int) {
+                        status?.text = "Target screenshot failed: $errorCode"
+                    }
+                })
+        } catch (e: Exception) {
+            status?.text = "Target reference failed: ${e.javaClass.simpleName}"
+        }
+    }
+
     private fun captureTitleReference() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R ||
             rootInActiveWindow?.packageName?.toString() != "com.gof.global") {
@@ -462,9 +516,12 @@ class RallyService : AccessibilityService() {
                             val score = if (bitmap != null && reference != null)
                                 compareTitle(reference, titleSamples(bitmap)) else null
                             if (score != null) lastMatchScore = score
-                            status?.text = if (score == null)
-                                "Capture ${elapsed}ms; title accessible: ${titleExposed}; no reference"
-                            else "Capture ${elapsed}ms; title match ${(score * 100).toInt()}%; accessible: ${titleExposed}"
+                            val targetScore = if (bitmap != null && targetPixels != null)
+                                compareTitle(targetPixels!!, titleSamples(bitmap)) else null
+                            status?.text = "Capture ${elapsed}ms | Target " +
+                                (targetScore?.let { "${(it * 100).toInt()}%" } ?: "no ref") +
+                                " | Deploy " +
+                                (score?.let { "${(it * 100).toInt()}%" } ?: "no ref")
                             // No gestures: a high similarity score alone is not validated screen identity.
                             Log.i("WosFastRally", "v0.6 trigger=${trigger} screenshotMs=${elapsed} titleAccessible=${titleExposed} labels=${labels.size}")
                         } finally { buffer.close() }
