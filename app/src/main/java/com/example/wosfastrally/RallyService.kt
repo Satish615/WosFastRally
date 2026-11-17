@@ -194,7 +194,7 @@ class RallyService : AccessibilityService() {
         detectionButton = detection
         body.addView(detection, LinearLayout.LayoutParams(-1, dp(36)).apply { topMargin = dp(5) })
         val autoTarget = TextView(this).apply {
-            text = "AUTO TARGET TEST: OFF"
+            text = "AUTO DEPLOY TEST: OFF"
             textSize = 11f
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
@@ -206,16 +206,16 @@ class RallyService : AccessibilityService() {
                     mainHandler.removeCallbacks(targetRetry)
                     targetAutoMatches = 0
                     text = "AUTO TARGET TEST: OFF"
-                    status?.text = "Auto Target test cancelled"
-                } else if (targetPixels == null) {
-                    status?.text = "Save a Target reference first"
+                    status?.text = "Auto Deploy test cancelled"
+                } else if (referencePixels == null) {
+                    status?.text = "Save a Deploy reference first"
                 } else {
                     targetAutoArmed = true
                     targetAutoMatches = 0
                     detectionArmed = true
                     detectionButton?.text = "DETECT: ON"
-                    text = "AUTO TARGET: ARMED (ONE DEPLOY)"
-                    status?.text = "Will send one real Target deployment on confirmed match"
+                    text = "AUTO DEPLOY: ARMED (ONE DEPLOY)"
+                    status?.text = "Will send one real deployment on Deploy title match ≥96%"
                     probeFormation("target-test-armed")
                 }
             }
@@ -637,11 +637,11 @@ class RallyService : AccessibilityService() {
                                 " | Deploy " +
                                 (score?.let { "${(it * 100).toInt()}%" } ?: "no ref")
                             if (targetAutoArmed && !testing) {
-                                if (targetScore != null && targetScore >= 0.96f) {
+                                if (score != null && score >= 0.96f) {
                                     targetAutoArmed = false
                                     mainHandler.removeCallbacks(targetRetry)
                                     targetAutoButton?.text = "AUTO TARGET TEST: OFF"
-                                    status?.text = "Target ${(targetScore * 100).toInt()}%; deploying F$selected"
+                                    status?.text = "Deploy ${(score * 100).toInt()}%; deploying F$selected"
                                     selectAndDeploy(DeployTiming(started, screenshotDoneNs,
                                         SystemClock.elapsedRealtimeNanos(), lastGameEventNs))
                                 } else {
