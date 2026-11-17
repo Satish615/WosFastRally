@@ -36,6 +36,10 @@ class RallyService : AccessibilityService() {
     private var collapseControl: TextView? = null
     private var collapsed = false
     private var detectionArmed = false
+    private var targetAutoArmed = false
+    private var targetAutoButton: TextView? = null
+    private var targetAutoMatches = 0
+    private var screenshotInFlight = false
     private var lastProbeMs = 0L
     private var detectionButton: TextView? = null
     private var referenceButton: TextView? = null
@@ -61,6 +65,11 @@ class RallyService : AccessibilityService() {
         selected = prefs.getInt("activeFormation", 7).takeIf { it in 5..7 } ?: 7
         collapsed = prefs.getBoolean("collapsed", false)
         detectionArmed = false
+        // Old Deploy reference was accidentally captured on Target. Invalidate it.
+        if (!prefs.getBoolean("invalidDeployReferenceClearedV12", false)) {
+            prefs.edit().remove("deployTitleReference")
+                .putBoolean("invalidDeployReferenceClearedV12", true).apply()
+        }
         referencePixels = loadReference()
         targetPixels = loadTargetReference()
         if (!Settings.canDrawOverlays(this)) {
@@ -181,6 +190,34 @@ class RallyService : AccessibilityService() {
         }
         detectionButton = detection
         body.addView(detection, LinearLayout.LayoutParams(-1, dp(36)).apply { topMargin = dp(5) })
+        val autoTarget = TextView(this).apply {
+            text = "AUTO TARGET TEST: OFF"
+            textSize = 11f
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = background(Color.rgb(140, 65, 40))
+            isClickable = true
+            setOnClickListener {
+                if (targetAutoArmed) {
+                    targetAutoArmed = false
+                    targetAutoMatches = 0
+                    text = "AUTO TARGET TEST: OFF"
+                    status?.text = "Auto Target test cancelled"
+                } else if (targetPixels == null) {
+                    status?.text = "Save a Target reference first"
+                } else {
+                    targetAutoArmed = true
+                    targetAutoMatches = 0
+                    detectionArmed = true
+                    detectionButton?.text = "DETECT: ON"
+                    text = "AUTO TARGET: ARMED (ONE DEPLOY)"
+                    status?.text = "Will send one real Target deployment on confirmed match"
+                    probeFormation("target-test-armed")
+                }
+            }
+        }
+        targetAutoButton = autoTarget
+        body.addView(autoTarget, LinearLayout.LayoutParams(-1, dp(36)).apply { topMargin = dp(5) })
         detection.text = "DETECT: OFF"
         val reference = TextView(this).apply {
             text = "SAVE DEPLOY TITLE REFERENCE"
@@ -514,9 +551,9 @@ class RallyService : AccessibilityService() {
     }
 
     private fun probeFormation(trigger: String) {
-        if (!detectionArmed || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        if (!detectionArmed || Build.VERSION.SDK_INT < Build.VERSION_CODES.R || screenshotInFlight) return
         val now = SystemClock.elapsedRealtime()
-        if (now - lastProbeMs < 250L) return
+        if (now - lastProbeMs < 80L) return
         lastProbeMs = now
         val root = rootInActiveWindow
         val gameActive = root?.packageName?.toString() == "com.gof.global"
@@ -536,6 +573,7 @@ class RallyService : AccessibilityService() {
         root?.let { collect(it, 0) }
         val titleExposed = labels.any { it.trim().equals("Deploy", ignoreCase = true) }
         val started = SystemClock.elapsedRealtimeNanos()
+        screenshotInFlight = true
         try {
             takeScreenshot(android.view.Display.DEFAULT_DISPLAY, mainExecutor,
                 object : TakeScreenshotCallback {
@@ -558,19 +596,41 @@ class RallyService : AccessibilityService() {
                                 (targetScore?.let { "${(it * 100).toInt()}%" } ?: "no ref") +
                                 " | Deploy " +
                                 (score?.let { "${(it * 100).toInt()}%" } ?: "no ref")
-                            // No gestures: a high similarity score alone is not validated screen identity.
+                            if (targetAutoArmed && !testing) {
+                                if (targetScore != null && targetScore >= 0.97f) {
+                                    targetAutoMatches++
+                                    if (targetAutoMatches >= 2) {
+                                        targetAutoArmed = false
+                                        targetAutoMatches = 0
+                                        targetAutoButton?.text = "AUTO TARGET TEST: OFF"
+                                        status?.text = "Target confirmed; deploying F$selected"
+                                        selectAndDeploy()
+                                    } else {
+                                        mainHandler.postDelayed({
+                                            if (targetAutoArmed) probeFormation("confirm-target")
+                                        }, 100L)
+                                    }
+                                } else {
+                                    targetAutoMatches = 0
+                                }
+                            }
                             Log.i("WosFastRally", "v0.6 trigger=${trigger} screenshotMs=${elapsed} titleAccessible=${titleExposed} labels=${labels.size}")
                         } catch (e: Exception) {
                             status?.text = "Detection error: ${e.javaClass.simpleName}"
                             Log.e("WosFastRally", "Detection screenshot failed", e)
-                        } finally { buffer.close() }
+                        } finally {
+                            buffer.close()
+                            screenshotInFlight = false
+                        }
                     }
                     override fun onFailure(errorCode: Int) {
+                        screenshotInFlight = false
                         status?.text = "Screenshot failed (${errorCode}); title accessible: ${titleExposed}"
                         Log.w("WosFastRally", "Screenshot failed code=${errorCode}")
                     }
                 })
         } catch (e: Exception) {
+            screenshotInFlight = false
             status?.text = "Screenshot unavailable: ${e.javaClass.simpleName}"
             Log.w("WosFastRally", "Screenshot unavailable", e)
         }
@@ -603,6 +663,8 @@ class RallyService : AccessibilityService() {
         referenceButton = null
         targetReferenceButton = null
         detectionArmed = false
+        targetAutoArmed = false
+        targetAutoButton = null
     }
     override fun onDestroy() { removePanel(); super.onDestroy() }
 }
