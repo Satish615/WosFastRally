@@ -21,7 +21,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import kotlin.math.roundToInt
 
-/** v0.4: explicit manual select + Deploy test with 100 ms inter-gesture delay. */
+/** v0.5: compact collapsible overlay; manual deployment remains unchanged. */
 class RallyService : AccessibilityService() {
     private var wm: WindowManager? = null
     private var panel: LinearLayout? = null
@@ -30,6 +30,9 @@ class RallyService : AccessibilityService() {
     private var status: TextView? = null
     private var testButton: TextView? = null
     private var deployButton: TextView? = null
+    private var bodyPanel: LinearLayout? = null
+    private var collapseControl: TextView? = null
+    private var collapsed = false
     private var observedPackage: String? = null
     private var selected = 7
     private var lastEventMs = 0L
@@ -44,6 +47,7 @@ class RallyService : AccessibilityService() {
         removePanel()
         val prefs = getSharedPreferences("config", MODE_PRIVATE)
         selected = prefs.getInt("activeFormation", 7).takeIf { it in 5..7 } ?: 7
+        collapsed = prefs.getBoolean("collapsed", false)
         if (!Settings.canDrawOverlays(this)) {
             Log.w("WosFastRally", "Overlay permission missing")
             return
@@ -51,22 +55,40 @@ class RallyService : AccessibilityService() {
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(8), dp(8), dp(8), dp(8))
+            setPadding(dp(5), dp(5), dp(5), dp(5))
             background = background(Color.rgb(24, 37, 47))
         }
         val handle = TextView(this).apply {
-            text = "☰  WOS  •  drag here"
+            text = "☰ WOS • drag"
             setTextColor(Color.WHITE)
             textSize = 13f
             gravity = Gravity.CENTER
             setPadding(dp(6), dp(5), dp(6), dp(8))
         }
-        root.addView(handle)
+        val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        header.addView(handle, LinearLayout.LayoutParams(0, dp(30), 1f))
+        val toggle = TextView(this).apply {
+            textSize = 14f
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            isClickable = true
+            setOnClickListener {
+                collapsed = !collapsed
+                prefs.edit().putBoolean("collapsed", collapsed).apply()
+                updateCollapsed()
+            }
+        }
+        header.addView(toggle, LinearLayout.LayoutParams(dp(45), dp(30)))
+        collapseControl = toggle
+        root.addView(header)
+        val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        bodyPanel = body
+        root.addView(body)
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         for (slot in 5..7) {
             val view = TextView(this).apply {
                 text = "F$slot"
-                textSize = 17f
+                textSize = 14f
                 gravity = Gravity.CENTER
                 setTextColor(Color.WHITE)
                 isClickable = true
@@ -79,12 +101,12 @@ class RallyService : AccessibilityService() {
                     Log.i("WosFastRally", "Selected F$slot at ${SystemClock.elapsedRealtimeNanos()}")
                 }
             }
-            val lp = LinearLayout.LayoutParams(dp(62), dp(52))
-            if (slot != 5) lp.leftMargin = dp(6)
+            val lp = LinearLayout.LayoutParams(dp(48), dp(38))
+            if (slot != 5) lp.leftMargin = dp(4)
             row.addView(view, lp)
             slotViews[slot] = view
         }
-        root.addView(row)
+        body.addView(row)
         val test = TextView(this).apply {
             text = "TEST F$selected preset tap"
             textSize = 13f
@@ -95,7 +117,7 @@ class RallyService : AccessibilityService() {
             isClickable = true
             setOnClickListener { testPresetTap() }
         }
-        root.addView(test, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(6) })
+        body.addView(test, LinearLayout.LayoutParams(-1, dp(36)).apply { topMargin = dp(6) })
         testButton = test
         val deploy = TextView(this).apply {
             text = "SELECT + DEPLOY (100 ms)"
@@ -107,7 +129,7 @@ class RallyService : AccessibilityService() {
             isClickable = true
             setOnClickListener { selectAndDeploy() }
         }
-        root.addView(deploy, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(6) })
+        body.addView(deploy, LinearLayout.LayoutParams(-1, dp(36)).apply { topMargin = dp(6) })
         deployButton = deploy
         val diagnostics = TextView(this).apply {
             text = "SHOW detected packages"
@@ -119,15 +141,16 @@ class RallyService : AccessibilityService() {
             isClickable = true
             setOnClickListener { showDetectedPackages() }
         }
-        root.addView(diagnostics, LinearLayout.LayoutParams(-1, dp(40)).apply { topMargin = dp(6) })
+        body.addView(diagnostics, LinearLayout.LayoutParams(-1, dp(32)).apply { topMargin = dp(6) })
         status = TextView(this).apply {
             setTextColor(Color.LTGRAY)
             textSize = 11f
             gravity = Gravity.CENTER
             setPadding(0, dp(6), 0, 0)
         }
-        root.addView(status)
+        body.addView(status)
         refreshSelection()
+        updateCollapsed()
         val windowParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -176,7 +199,15 @@ class RallyService : AccessibilityService() {
             view.isSelected = active
         }
         testButton?.text = "TEST F$selected preset tap"
-        status?.text = "F$selected • explicit Deploy only"
+        status?.text = "F$selected • 100 ms • manual Deploy"
+        if (collapsed) collapseControl?.text = "F$selected ▣"
+    }
+
+    private fun updateCollapsed() {
+        bodyPanel?.visibility = if (collapsed) View.GONE else View.VISIBLE
+        collapseControl?.text = if (collapsed) "F$selected ▣" else "−"
+        collapseControl?.contentDescription = if (collapsed) "Expand overlay, F$selected"
+            else "Collapse overlay"
     }
 
     private fun testPresetTap() {
@@ -299,6 +330,8 @@ class RallyService : AccessibilityService() {
         status = null
         testButton = null
         deployButton = null
+        bodyPanel = null
+        collapseControl = null
     }
     override fun onDestroy() { removePanel(); super.onDestroy() }
 }
