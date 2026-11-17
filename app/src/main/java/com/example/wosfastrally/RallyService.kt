@@ -39,6 +39,9 @@ class RallyService : AccessibilityService() {
     private var targetAutoArmed = false
     private var targetAutoButton: TextView? = null
     private var targetAutoMatches = 0
+    private var waitingForDeployExit = false
+    private var deployExitMisses = 0
+    private var lastAutoDeployNs = 0L
     private var latencyReport: TextView? = null
     private var screenshotInFlight = false
     private val targetRetry = Runnable { if (targetAutoArmed) probeFormation("target-retry") }
@@ -74,6 +77,10 @@ class RallyService : AccessibilityService() {
         }
         referencePixels = loadReference()
         targetPixels = loadTargetReference()
+        targetAutoArmed = prefs.getBoolean("persistentAutoDeploy", false) && referencePixels != null
+        detectionArmed = targetAutoArmed
+        waitingForDeployExit = false
+        deployExitMisses = 0
         if (!Settings.canDrawOverlays(this)) {
             Log.w("WosFastRally", "Overlay permission missing")
             return
@@ -193,29 +200,37 @@ class RallyService : AccessibilityService() {
         detectionButton = detection
         body.addView(detection, LinearLayout.LayoutParams(-1, dp(36)).apply { topMargin = dp(5) })
         val autoTarget = TextView(this).apply {
-            text = "AUTO DEPLOY TEST: OFF"
+            text = if (targetAutoArmed) "AUTO DEPLOY: ON" else "AUTO DEPLOY: OFF"
             textSize = 11f
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
-            background = background(Color.rgb(140, 65, 40))
+            background = background(if (targetAutoArmed) Color.rgb(22, 117, 72) else Color.rgb(140, 65, 40))
             isClickable = true
             setOnClickListener {
                 if (targetAutoArmed) {
                     targetAutoArmed = false
+                    waitingForDeployExit = false
+                    deployExitMisses = 0
                     mainHandler.removeCallbacks(targetRetry)
-                    targetAutoMatches = 0
-                    text = "AUTO DEPLOY TEST: OFF"
-                    status?.text = "Auto Deploy test cancelled"
+                    getSharedPreferences("config", MODE_PRIVATE).edit()
+                        .putBoolean("persistentAutoDeploy", false).apply()
+                    text = "AUTO DEPLOY: OFF"
+                    background = background(Color.rgb(140, 65, 40))
+                    status?.text = "Auto Deploy disabled"
                 } else if (referencePixels == null) {
                     status?.text = "Save a Deploy reference first"
                 } else {
                     targetAutoArmed = true
-                    targetAutoMatches = 0
+                    waitingForDeployExit = false
+                    deployExitMisses = 0
                     detectionArmed = true
                     detectionButton?.text = "DETECT: ON"
-                    text = "AUTO DEPLOY: ARMED (ONE DEPLOY)"
-                    status?.text = "Will send one real deployment on Deploy title match ≥96%"
-                    probeFormation("target-test-armed")
+                    getSharedPreferences("config", MODE_PRIVATE).edit()
+                        .putBoolean("persistentAutoDeploy", true).apply()
+                    text = "AUTO DEPLOY: ON"
+                    background = background(Color.rgb(22, 117, 72))
+                    status?.text = "Auto Deploy ON • Deploy match ≥96%"
+                    probeFormation("auto-deploy-enabled")
                 }
             }
         }
@@ -229,8 +244,9 @@ class RallyService : AccessibilityService() {
         latencyReport = timingView
         body.addView(timingView, LinearLayout.LayoutParams(-1, -2))
         targetAutoButton = autoTarget
+        if (targetAutoArmed) mainHandler.postDelayed(targetRetry, 400L)
         body.addView(autoTarget, LinearLayout.LayoutParams(-1, dp(36)).apply { topMargin = dp(5) })
-        detection.text = "DETECT: OFF"
+        detection.text = if (detectionArmed) "DETECT: ON" else "DETECT: OFF"
         val reference = TextView(this).apply {
             text = "SAVE DEPLOY TITLE REFERENCE"
             textSize = 11f
@@ -595,6 +611,7 @@ class RallyService : AccessibilityService() {
         val gameActive = root?.packageName?.toString() == "com.gof.global"
         if (!gameActive) {
             status?.text = "Detection: WOS not foreground"
+            scheduleTargetRetry(400L)
             return
         }
         // Unity may not expose the title in its accessibility hierarchy.
@@ -633,16 +650,30 @@ class RallyService : AccessibilityService() {
                                 (targetScore?.let { "${(it * 100).toInt()}%" } ?: "no ref") +
                                 " | Deploy " +
                                 (score?.let { "${(it * 100).toInt()}%" } ?: "no ref")
-                            if (targetAutoArmed && !testing) {
-                                if (score != null && score >= 0.96f) {
-                                    targetAutoArmed = false
-                                    mainHandler.removeCallbacks(targetRetry)
-                                    targetAutoButton?.text = "AUTO DEPLOY TEST: OFF"
-                                    status?.text = "Deploy ${(score * 100).toInt()}%; deploying F$selected"
+                            if (targetAutoArmed) {
+                                val matchesDeploy = score != null && score >= 0.96f
+                                if (waitingForDeployExit) {
+                                    // Never deploy twice on the same visible formation.
+                                    // Require two non-matching screenshots after the gesture.
+                                    if (!testing && !matchesDeploy) deployExitMisses++
+                                    else if (matchesDeploy) deployExitMisses = 0
+                                    if (deployExitMisses >= 2) {
+                                        waitingForDeployExit = false
+                                        deployExitMisses = 0
+                                        status?.text = "Deploy screen exited • ready for next rally"
+                                    }
+                                    scheduleTargetRetry(400L)
+                                } else if (!testing && matchesDeploy &&
+                                    SystemClock.elapsedRealtimeNanos() - lastAutoDeployNs > 1_500_000_000L) {
+                                    waitingForDeployExit = true
+                                    deployExitMisses = 0
+                                    lastAutoDeployNs = SystemClock.elapsedRealtimeNanos()
+                                    status?.text = "Deploy ${(score!! * 100).toInt()}%; selecting F$selected"
                                     selectAndDeploy(DeployTiming(started, screenshotDoneNs,
                                         SystemClock.elapsedRealtimeNanos()))
+                                    scheduleTargetRetry(400L)
                                 } else {
-                                    scheduleTargetRetry()
+                                    scheduleTargetRetry(400L)
                                 }
                             }
                             Log.i("WosFastRally", "v0.6 trigger=${trigger} screenshotMs=${elapsed} titleAccessible=${titleExposed} labels=${labels.size}")
