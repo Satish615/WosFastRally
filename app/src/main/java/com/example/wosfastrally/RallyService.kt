@@ -2,6 +2,8 @@ package com.example.wosfastrally
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.os.Build
+import android.view.accessibility.AccessibilityNodeInfo
 import android.graphics.Path
 import android.os.Handler
 import android.os.Looper
@@ -21,7 +23,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import kotlin.math.roundToInt
 
-/** v0.5: compact collapsible overlay; manual deployment remains unchanged. */
+/** v0.6: opt-in screenshot latency + accessible-title diagnostics; no auto taps. */
 class RallyService : AccessibilityService() {
     private var wm: WindowManager? = null
     private var panel: LinearLayout? = null
@@ -33,6 +35,10 @@ class RallyService : AccessibilityService() {
     private var bodyPanel: LinearLayout? = null
     private var collapseControl: TextView? = null
     private var collapsed = false
+    private var detectionArmed = false
+    private var lastProbeMs = 0L
+    private var detectionButton: TextView? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
     private var observedPackage: String? = null
     private var selected = 7
     private var lastEventMs = 0L
@@ -48,6 +54,7 @@ class RallyService : AccessibilityService() {
         val prefs = getSharedPreferences("config", MODE_PRIVATE)
         selected = prefs.getInt("activeFormation", 7).takeIf { it in 5..7 } ?: 7
         collapsed = prefs.getBoolean("collapsed", false)
+        detectionArmed = false
         if (!Settings.canDrawOverlays(this)) {
             Log.w("WosFastRally", "Overlay permission missing")
             return
@@ -149,6 +156,24 @@ class RallyService : AccessibilityService() {
             setPadding(0, dp(6), 0, 0)
         }
         body.addView(status)
+        val detection = TextView(this).apply {
+            textSize = 11f
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            setPadding(dp(5), dp(5), dp(5), dp(5))
+            background = background(Color.rgb(46, 96, 150))
+            isClickable = true
+            setOnClickListener {
+                detectionArmed = !detectionArmed
+                text = if (detectionArmed) "DETECT: ON (no taps)" else "DETECT: OFF"
+                status?.text = if (detectionArmed) "Detection-only: open formation screen"
+                    else "Detection stopped"
+                if (detectionArmed) probeFormation("manual")
+            }
+        }
+        detectionButton = detection
+        body.addView(detection, LinearLayout.LayoutParams(-1, dp(36)).apply { topMargin = dp(5) })
+        detection.text = "DETECT: OFF"
         refreshSelection()
         updateCollapsed()
         val windowParams = WindowManager.LayoutParams(
@@ -314,9 +339,64 @@ class RallyService : AccessibilityService() {
         Log.i("WosFastRally", "Detected packages: $packages")
     }
 
+    private fun probeFormation(trigger: String) {
+        if (!detectionArmed || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastProbeMs < 250L) return
+        lastProbeMs = now
+        val root = rootInActiveWindow
+        val gameActive = root?.packageName?.toString() == "com.gof.global"
+        if (!gameActive) {
+            status?.text = "Detection: WOS not foreground"
+            return
+        }
+        // Unity may not expose the title in its accessibility hierarchy.
+        // Inspect only accessible labels, never assume package == formation screen.
+        val labels = mutableListOf<String>()
+        fun collect(node: AccessibilityNodeInfo, depth: Int) {
+            if (depth > 12 || labels.size > 150) return
+            node.text?.toString()?.let(labels::add)
+            node.contentDescription?.toString()?.let(labels::add)
+            for (i in 0 until node.childCount) node.getChild(i)?.let { collect(it, depth + 1) }
+        }
+        root?.let { collect(it, 0) }
+        val titleExposed = labels.any { it.trim().equals("Deploy", ignoreCase = true) }
+        val started = SystemClock.elapsedRealtimeNanos()
+        try {
+            takeScreenshot(android.view.Display.DEFAULT_DISPLAY, mainExecutor,
+                object : TakeScreenshotCallback {
+                    override fun onSuccess(result: ScreenshotResult) {
+                        val buffer = result.hardwareBuffer
+                        try {
+                            val bitmap = android.graphics.Bitmap.wrapHardwareBuffer(
+                                buffer, result.colorSpace)
+                            // Diagnostics only: do not store/upload screenshot or trigger taps.
+                            val elapsed = (SystemClock.elapsedRealtimeNanos() - started) / 1_000_000
+                            val dimensions = if (bitmap == null) "unavailable"
+                                else "${bitmap.width}x${bitmap.height}"
+                            status?.text = "Capture ${elapsed}ms (${dimensions}); title accessible: ${titleExposed}"
+                            Log.i("WosFastRally", "v0.6 trigger=${trigger} screenshotMs=${elapsed} titleAccessible=${titleExposed} labels=${labels.size}")
+                        } finally { buffer.close() }
+                    }
+                    override fun onFailure(errorCode: Int) {
+                        status?.text = "Screenshot failed (${errorCode}); title accessible: ${titleExposed}"
+                        Log.w("WosFastRally", "Screenshot failed code=${errorCode}")
+                    }
+                })
+        } catch (e: Exception) {
+            status?.text = "Screenshot unavailable: ${e.javaClass.simpleName}"
+            Log.w("WosFastRally", "Screenshot unavailable", e)
+        }
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val pkg = event?.packageName?.toString() ?: return
         if (pkg != packageName && pkg != "com.android.systemui") observedPackage = pkg
+        if (detectionArmed && pkg == "com.gof.global" &&
+            (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+             event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)) {
+            probeFormation("accessibility-event")
+        }
         val now = SystemClock.elapsedRealtime()
         val delta = if (lastEventMs == 0L) 0L else now - lastEventMs
         lastEventMs = now
@@ -332,6 +412,8 @@ class RallyService : AccessibilityService() {
         deployButton = null
         bodyPanel = null
         collapseControl = null
+        detectionButton = null
+        detectionArmed = false
     }
     override fun onDestroy() { removePanel(); super.onDestroy() }
 }
