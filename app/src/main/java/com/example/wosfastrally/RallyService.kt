@@ -1,6 +1,11 @@
 package com.example.wosfastrally
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
+import android.graphics.Path
+import android.os.Handler
+import android.os.Looper
+import android.view.accessibility.AccessibilityWindowInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
@@ -16,15 +21,17 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import kotlin.math.roundToInt
 
-/** v0.2: movable, touchable formation selector. No gameplay gestures. */
+/** v0.3: explicit, one-tap preset test. No automatic screen detection or Deploy. */
 class RallyService : AccessibilityService() {
     private var wm: WindowManager? = null
     private var panel: LinearLayout? = null
     private var params: WindowManager.LayoutParams? = null
     private val slotViews = mutableMapOf<Int, TextView>()
     private var status: TextView? = null
+    private var testButton: TextView? = null
     private var selected = 7
     private var lastEventMs = 0L
+    private var testing = false
     private fun dp(v: Int) = (v * resources.displayMetrics.density).roundToInt()
 
     private fun background(color: Int, radius: Int = 12): GradientDrawable =
@@ -76,6 +83,18 @@ class RallyService : AccessibilityService() {
             slotViews[slot] = view
         }
         root.addView(row)
+        val test = TextView(this).apply {
+            text = "TEST F$selected preset tap"
+            textSize = 13f
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+            background = background(Color.rgb(46, 96, 150))
+            isClickable = true
+            setOnClickListener { testPresetTap() }
+        }
+        root.addView(test, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(6) })
+        testButton = test
         status = TextView(this).apply {
             setTextColor(Color.LTGRAY)
             textSize = 11f
@@ -131,7 +150,46 @@ class RallyService : AccessibilityService() {
             view.alpha = if (active) 1f else 0.92f
             view.isSelected = active
         }
-        status?.text = "Selected F$selected  •  dry run (no taps)"
+        testButton?.text = "TEST F$selected preset tap"
+        status?.text = "F$selected • manual test only • no Deploy"
+    }
+
+    private fun testPresetTap() {
+        if (testing) return
+        // Explicit user initiation only. Avoid tapping another application.
+        val foregroundPackage = rootInActiveWindow?.packageName?.toString().orEmpty()
+        if (!foregroundPackage.contains("whiteout", true) &&
+            !foregroundPackage.contains("centurygame", true)) {
+            status?.text = "Not in WOS; no tap sent"
+            return
+        }
+        val display = resources.displayMetrics
+        val width = display.widthPixels.toFloat()
+        val height = display.heightPixels.toFloat()
+        // From the user's 709x1536 portrait screenshot; normalized icon centers.
+        val xFraction = when (selected) { 5 -> 0.50f; 6 -> 0.60f; else -> 0.705f }
+        val x = width * xFraction
+        val y = height * 0.119f
+        val path = Path().apply { moveTo(x, y) }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0L, 65L))
+            .build()
+        testing = true
+        status?.text = "Testing F$selected preset..."
+        val accepted = dispatchGesture(gesture, object : GestureResultCallback() {
+            override fun onCompleted(gestureDescription: GestureDescription?) {
+                testing = false
+                status?.text = "F$selected tap sent • check selected preset"
+            }
+            override fun onCancelled(gestureDescription: GestureDescription?) {
+                testing = false
+                status?.text = "Tap cancelled • no Deploy"
+            }
+        }, Handler(Looper.getMainLooper()))
+        if (!accepted) {
+            testing = false
+            status?.text = "Gesture rejected • no Deploy"
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -148,6 +206,7 @@ class RallyService : AccessibilityService() {
         panel = null
         slotViews.clear()
         status = null
+        testButton = null
     }
     override fun onDestroy() { removePanel(); super.onDestroy() }
 }

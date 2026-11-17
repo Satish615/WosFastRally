@@ -14,8 +14,8 @@ class MainActivity : Activity() {
   val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(28, 28, 28, 28) }
   val scroll = ScrollView(this); scroll.addView(layout); setContentView(scroll)
   fun label(t: String) { layout.addView(TextView(this).apply { text=t; textSize=16f; setPadding(0,12,0,8) }) }
-  label("WOS Fast Rally v0.2 — formation selector (dry run)")
-  label("Select F5, F6, or F7 from the floating panel. Drag using its top handle. No gameplay taps are sent in v0.2. Legacy coordinates below are retained for compatibility but are not used by the selector.")
+  label("WOS Fast Rally v0.3 — manual preset gesture test")
+  label("Select F5, F6, or F7 from the floating panel. Drag using its top handle. On the formation screen, press TEST F5/F6/F7 preset tap. It sends one preset tap only, never Deploy. Automatic screen detection is not enabled. Legacy coordinates below are not used.")
   val values = linkedMapOf("row1x" to .89f,"row1y" to .26f,"row2x" to .89f,"row2y" to .51f,"row3x" to .89f,"row3y" to .77f,"presetx" to .19f,"presety" to .09f,"deployx" to .77f,"deployy" to .95f)
   val edits = mutableMapOf<String,EditText>()
   for ((key,default) in values) { val line=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER_VERTICAL }
@@ -32,6 +32,6 @@ class MainActivity : Activity() {
   overlay.setOnClickListener { startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,Uri.parse("package:$packageName"))) }
   val accessibility=Button(this).apply { text="Enable accessibility service" }; layout.addView(accessibility)
   accessibility.setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
-  label("Overlay requires accessibility and overlay permissions. Drag the top handle; tap F5/F6/F7 to change selection. Green means active. No automatic formation or Deploy taps in v0.2.")
+  label("Overlay requires accessibility and overlay permissions. Drag the top handle; tap F5/F6/F7 to change selection. Green means active. Use TEST only after the formation screen is open. Deploy is never tapped in v0.3.")
  }
 }
