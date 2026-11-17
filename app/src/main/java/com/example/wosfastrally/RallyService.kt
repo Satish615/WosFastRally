@@ -77,18 +77,18 @@ class RallyService : AccessibilityService() {
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(5), dp(5), dp(5), dp(5))
+            setPadding(dp(3), dp(3), dp(3), dp(3))
             background = background(Color.rgb(24, 37, 47))
         }
         val handle = TextView(this).apply {
-            text = "☰ WOS • drag"
+            text = "☰ WOS"
             setTextColor(Color.WHITE)
-            textSize = 13f
+            textSize = 11f
             gravity = Gravity.CENTER
-            setPadding(dp(6), dp(5), dp(6), dp(8))
+            setPadding(dp(3), dp(2), dp(3), dp(2))
         }
         val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        header.addView(handle, LinearLayout.LayoutParams(0, dp(30), 1f))
+        header.addView(handle, LinearLayout.LayoutParams(0, dp(28), 1f))
         val toggle = TextView(this).apply {
             textSize = 14f
             gravity = Gravity.CENTER
@@ -100,7 +100,7 @@ class RallyService : AccessibilityService() {
                 updateCollapsed()
             }
         }
-        header.addView(toggle, LinearLayout.LayoutParams(dp(45), dp(30)))
+        header.addView(toggle, LinearLayout.LayoutParams(dp(34), dp(28)))
         collapseControl = toggle
         root.addView(header)
         val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -110,7 +110,7 @@ class RallyService : AccessibilityService() {
         for (slot in 5..7) {
             val view = TextView(this).apply {
                 text = "F$slot"
-                textSize = 14f
+                textSize = 12f
                 gravity = Gravity.CENTER
                 setTextColor(Color.WHITE)
                 isClickable = true
@@ -123,21 +123,23 @@ class RallyService : AccessibilityService() {
                     Log.i("WosFastRally", "Selected F$slot at ${SystemClock.elapsedRealtimeNanos()}")
                 }
             }
-            val lp = LinearLayout.LayoutParams(dp(48), dp(38))
-            if (slot != 5) lp.leftMargin = dp(4)
+            val lp = LinearLayout.LayoutParams(dp(49), dp(30))
+            if (slot != 5) lp.leftMargin = dp(3)
             row.addView(view, lp)
             slotViews[slot] = view
         }
         body.addView(row)
         status = TextView(this).apply {
             setTextColor(Color.LTGRAY)
-            textSize = 11f
+            textSize = 9f
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
             gravity = Gravity.CENTER
-            setPadding(0, dp(6), 0, 0)
+            setPadding(0, dp(2), 0, 0)
         }
         body.addView(status)
         val autoTarget = TextView(this).apply {
-            text = if (targetAutoArmed) "AUTO DEPLOY: ON" else "AUTO DEPLOY: OFF"
+            text = if (targetAutoArmed) "AUTO: ON" else "AUTO: OFF"
             textSize = 11f
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
@@ -152,7 +154,7 @@ class RallyService : AccessibilityService() {
                     mainHandler.removeCallbacks(targetRetry)
                     getSharedPreferences("config", MODE_PRIVATE).edit()
                         .putBoolean("persistentAutoDeploy", false).apply()
-                    text = "AUTO DEPLOY: OFF"
+                    text = "AUTO: OFF"
                     background = background(Color.rgb(140, 65, 40))
                     status?.text = "Auto Deploy disabled"
                 } else if (referencePixels == null) {
@@ -164,7 +166,7 @@ class RallyService : AccessibilityService() {
                     detectionArmed = true
                     getSharedPreferences("config", MODE_PRIVATE).edit()
                         .putBoolean("persistentAutoDeploy", true).apply()
-                    text = "AUTO DEPLOY: ON"
+                    text = "AUTO: ON"
                     background = background(Color.rgb(22, 117, 72))
                     status?.text = "Auto Deploy ON • Deploy match ≥96%"
                     probeFormation("auto-deploy-enabled")
@@ -179,12 +181,12 @@ class RallyService : AccessibilityService() {
             setPadding(dp(4), dp(5), dp(4), dp(5))
         }
         latencyReport = timingView
-        body.addView(timingView, LinearLayout.LayoutParams(-1, -2))
+        // Timing stays available in logcat without taking overlay space.
         targetAutoButton = autoTarget
         if (targetAutoArmed) mainHandler.postDelayed(targetRetry, 400L)
-        body.addView(autoTarget, LinearLayout.LayoutParams(-1, dp(36)).apply { topMargin = dp(5) })
+        body.addView(autoTarget, LinearLayout.LayoutParams(-1, dp(30)).apply { topMargin = dp(3) })
         val reference = TextView(this).apply {
-            text = if (referencePixels != null) "DEPLOY REFERENCE: SAVED ✓" else "SAVE DEPLOY REFERENCE"
+            text = if (referencePixels != null) "REF: SAVED ✓" else "SAVE DEPLOY REF"
             textSize = 11f
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
@@ -193,11 +195,11 @@ class RallyService : AccessibilityService() {
             setOnClickListener { captureTitleReference() }
         }
         referenceButton = reference
-        body.addView(reference, LinearLayout.LayoutParams(-1, dp(36)).apply { topMargin = dp(5) })
+        body.addView(reference, LinearLayout.LayoutParams(-1, dp(30)).apply { topMargin = dp(3) })
         refreshSelection()
         updateCollapsed()
         val windowParams = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            dp(170),
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
@@ -243,7 +245,7 @@ class RallyService : AccessibilityService() {
             view.alpha = if (active) 1f else 0.92f
             view.isSelected = active
         }
-        status?.text = "F$selected • Auto Deploy ${if (targetAutoArmed) "ON" else "OFF"}"
+        status?.text = "F$selected • Auto ${if (targetAutoArmed) "ON" else "OFF"}"
         if (collapsed) collapseControl?.text = "F$selected ▣"
     }
 
@@ -387,7 +389,7 @@ class RallyService : AccessibilityService() {
                             }
                             val pixels = titleSamples(bitmap)
                             referencePixels = pixels
-                            referenceButton?.text = "DEPLOY REFERENCE: SAVED ✓"
+                            referenceButton?.text = "REF: SAVED ✓"
                             getSharedPreferences("config", MODE_PRIVATE).edit()
                                 .putString("deployTitleReference", pixels.joinToString(",")).apply()
                             status?.text = "Reference saved (confirm title was Deploy)"
