@@ -146,6 +146,7 @@ class RallyService : AccessibilityService() {
             setOnClickListener {
                 if (targetAutoArmed) {
                     targetAutoArmed = false
+                    detectionArmed = false
                     waitingForDeployExit = false
                     deployExitMisses = 0
                     mainHandler.removeCallbacks(targetRetry)
@@ -183,7 +184,7 @@ class RallyService : AccessibilityService() {
         if (targetAutoArmed) mainHandler.postDelayed(targetRetry, 400L)
         body.addView(autoTarget, LinearLayout.LayoutParams(-1, dp(36)).apply { topMargin = dp(5) })
         val reference = TextView(this).apply {
-            text = "SAVE DEPLOY TITLE REFERENCE"
+            text = if (referencePixels != null) "DEPLOY REFERENCE: SAVED ✓" else "SAVE DEPLOY REFERENCE"
             textSize = 11f
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
@@ -322,7 +323,6 @@ class RallyService : AccessibilityService() {
         windows?.forEach { window ->
             window.root?.packageName?.toString()?.takeIf { it.isNotBlank() }?.let(found::add)
         }
-        observedPackage?.let(found::add)
         return found
     }
 
@@ -387,6 +387,7 @@ class RallyService : AccessibilityService() {
                             }
                             val pixels = titleSamples(bitmap)
                             referencePixels = pixels
+                            referenceButton?.text = "DEPLOY REFERENCE: SAVED ✓"
                             getSharedPreferences("config", MODE_PRIVATE).edit()
                                 .putString("deployTitleReference", pixels.joinToString(",")).apply()
                             status?.text = "Reference saved (confirm title was Deploy)"
