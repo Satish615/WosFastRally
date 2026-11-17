@@ -39,6 +39,8 @@ class RallyService : AccessibilityService() {
     private var targetAutoArmed = false
     private var targetAutoButton: TextView? = null
     private var targetAutoMatches = 0
+    private var lastGameEventNs = 0L
+    private var latencyReport: TextView? = null
     private var screenshotInFlight = false
     private val targetRetry = Runnable { if (targetAutoArmed) probeFormation("target-retry") }
     private var lastProbeMs = 0L
@@ -218,6 +220,15 @@ class RallyService : AccessibilityService() {
                 }
             }
         }
+        val timingView = TextView(this).apply {
+            text = "Last auto timing: awaiting deployment"
+            textSize = 10f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setPadding(dp(4), dp(5), dp(4), dp(5))
+        }
+        latencyReport = timingView
+        body.addView(timingView, LinearLayout.LayoutParams(-1, -2))
         targetAutoButton = autoTarget
         body.addView(autoTarget, LinearLayout.LayoutParams(-1, dp(36)).apply { topMargin = dp(5) })
         detection.text = "DETECT: OFF"
@@ -343,7 +354,9 @@ class RallyService : AccessibilityService() {
         }
     }
 
-    private fun selectAndDeploy() {
+    private data class DeployTiming(val screenshotStartNs: Long, val screenshotEndNs: Long, val matchEndNs: Long, val eventNs: Long)
+    private fun ms(a: Long, b: Long) = (b - a).coerceAtLeast(0L) / 1_000_000L
+    private fun selectAndDeploy(timing: DeployTiming? = null) {
         if (testing) return
         // User must explicitly tap SELECT + DEPLOY while the formation screen is visible.
         // This is not an automatic screen detector.
@@ -355,9 +368,11 @@ class RallyService : AccessibilityService() {
         val height = resources.displayMetrics.heightPixels.toFloat()
         val formation = selected
         testing = true
+        val selectStartNs = SystemClock.elapsedRealtimeNanos()
         status?.text = "Selecting F$formation..."
         sendTap(width * when (formation) { 5 -> 0.50f; 6 -> 0.60f; else -> 0.705f },
             height * 0.119f, onSuccess = {
+                val selectDoneNs = SystemClock.elapsedRealtimeNanos()
                 // Delay starts only after Android reports the formation gesture completed.
                 Handler(Looper.getMainLooper()).postDelayed({
                     if ("com.gof.global" !in detectedPackages()) {
@@ -365,10 +380,24 @@ class RallyService : AccessibilityService() {
                         status?.text = "Game not detected; Deploy cancelled"
                         return@postDelayed
                     }
+                    val deployStartNs = SystemClock.elapsedRealtimeNanos()
                     status?.text = "Sending Deploy..."
                     sendTap(width * 0.76f, height * 0.95f, onSuccess = {
                         testing = false
                         status?.text = "F$formation + Deploy gestures completed"
+                        val doneNs = SystemClock.elapsedRealtimeNanos()
+                        if (timing != null) {
+                            val report = "Capture ${ms(timing.screenshotStartNs, timing.screenshotEndNs)}ms" +
+                                " | Match ${ms(timing.screenshotEndNs, timing.matchEndNs)}ms" +
+                                " | Select ${ms(selectStartNs, selectDoneNs)}ms" +
+                                " | Wait ${ms(selectDoneNs, deployStartNs)}ms" +
+                                " | Deploy ${ms(deployStartNs, doneNs)}ms" +
+                                " | Total ${ms(timing.screenshotStartNs, doneNs)}ms" +
+                                (if (timing.eventNs > 0L && timing.eventNs <= timing.screenshotStartNs)
+                                    " | Event→done ${ms(timing.eventNs, doneNs)}ms" else "")
+                            latencyReport?.text = report
+                            Log.i("WosFastRally", "LATENCY $report")
+                        }
                     }, onFailure = {
                         testing = false
                         status?.text = "Deploy gesture cancelled/rejected"
@@ -593,7 +622,8 @@ class RallyService : AccessibilityService() {
                             val bitmap = android.graphics.Bitmap.wrapHardwareBuffer(
                                 buffer, result.colorSpace)
                             // Diagnostics only: do not store/upload screenshot or trigger taps.
-                            val elapsed = (SystemClock.elapsedRealtimeNanos() - started) / 1_000_000
+                            val screenshotDoneNs = SystemClock.elapsedRealtimeNanos()
+                            val elapsed = (screenshotDoneNs - started) / 1_000_000
                             val dimensions = if (bitmap == null) "unavailable"
                                 else "${bitmap.width}x${bitmap.height}"
                             val reference = referencePixels
@@ -612,7 +642,8 @@ class RallyService : AccessibilityService() {
                                     mainHandler.removeCallbacks(targetRetry)
                                     targetAutoButton?.text = "AUTO TARGET TEST: OFF"
                                     status?.text = "Target ${(targetScore * 100).toInt()}%; deploying F$selected"
-                                    selectAndDeploy()
+                                    selectAndDeploy(DeployTiming(started, screenshotDoneNs,
+                                        SystemClock.elapsedRealtimeNanos(), lastGameEventNs))
                                 } else {
                                     scheduleTargetRetry()
                                 }
@@ -645,6 +676,11 @@ class RallyService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val pkg = event?.packageName?.toString() ?: return
         if (pkg != packageName && pkg != "com.android.systemui") observedPackage = pkg
+        if (pkg == "com.gof.global" &&
+            (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+             event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)) {
+            lastGameEventNs = SystemClock.elapsedRealtimeNanos()
+        }
         if (detectionArmed && pkg == "com.gof.global" &&
             (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
              event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)) {
