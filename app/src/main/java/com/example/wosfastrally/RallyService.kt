@@ -21,7 +21,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import kotlin.math.roundToInt
 
-/** v0.3: explicit, one-tap preset test. No automatic screen detection or Deploy. */
+/** v0.3.1: package diagnostics. Gestures fail closed until a game package is confirmed. */
 class RallyService : AccessibilityService() {
     private var wm: WindowManager? = null
     private var panel: LinearLayout? = null
@@ -29,6 +29,7 @@ class RallyService : AccessibilityService() {
     private val slotViews = mutableMapOf<Int, TextView>()
     private var status: TextView? = null
     private var testButton: TextView? = null
+    private var observedPackage: String? = null
     private var selected = 7
     private var lastEventMs = 0L
     private var testing = false
@@ -95,6 +96,17 @@ class RallyService : AccessibilityService() {
         }
         root.addView(test, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(6) })
         testButton = test
+        val diagnostics = TextView(this).apply {
+            text = "SHOW detected packages"
+            textSize = 12f
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            background = background(Color.rgb(70, 82, 94))
+            isClickable = true
+            setOnClickListener { showDetectedPackages() }
+        }
+        root.addView(diagnostics, LinearLayout.LayoutParams(-1, dp(40)).apply { topMargin = dp(6) })
         status = TextView(this).apply {
             setTextColor(Color.LTGRAY)
             textSize = 11f
@@ -156,11 +168,12 @@ class RallyService : AccessibilityService() {
 
     private fun testPresetTap() {
         if (testing) return
-        // Explicit user initiation only. Avoid tapping another application.
-        val foregroundPackage = rootInActiveWindow?.packageName?.toString().orEmpty()
-        if (!foregroundPackage.contains("whiteout", true) &&
-            !foregroundPackage.contains("centurygame", true)) {
-            status?.text = "Not in WOS; no tap sent"
+        // Fail closed until the game's actual package has been observed and confirmed.
+        val packages = detectedPackages()
+        val gamePackage = getSharedPreferences("config", MODE_PRIVATE)
+            .getString("confirmedGamePackage", null)
+        if (gamePackage.isNullOrBlank() || gamePackage !in packages) {
+            status?.text = "No confirmed game package; tap SHOW detected packages"
             return
         }
         val display = resources.displayMetrics
@@ -192,9 +205,26 @@ class RallyService : AccessibilityService() {
         }
     }
 
+    private fun detectedPackages(): Set<String> {
+        val found = linkedSetOf<String>()
+        rootInActiveWindow?.packageName?.toString()?.takeIf { it.isNotBlank() }?.let(found::add)
+        windows?.forEach { window ->
+            window.root?.packageName?.toString()?.takeIf { it.isNotBlank() }?.let(found::add)
+        }
+        observedPackage?.let(found::add)
+        return found
+    }
+
+    private fun showDetectedPackages() {
+        val packages = detectedPackages().filterNot { it == packageName }
+        status?.text = if (packages.isEmpty()) "No external packages visible"
+            else "Detected: " + packages.joinToString(", ")
+        Log.i("WosFastRally", "Detected packages: $packages")
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val pkg = event?.packageName?.toString() ?: return
-        if (!pkg.contains("whiteout", true) && !pkg.contains("centurygame", true)) return
+        if (pkg != packageName && pkg != "com.android.systemui") observedPackage = pkg
         val now = SystemClock.elapsedRealtime()
         val delta = if (lastEventMs == 0L) 0L else now - lastEventMs
         lastEventMs = now
