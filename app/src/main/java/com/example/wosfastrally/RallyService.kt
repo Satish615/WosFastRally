@@ -40,6 +40,7 @@ class RallyService : AccessibilityService() {
     private var targetAutoButton: TextView? = null
     private var targetAutoMatches = 0
     private var screenshotInFlight = false
+    private val targetProbeRunnable = Runnable { if (targetAutoArmed) probeFormation("target-auto-retry") }
     private var lastProbeMs = 0L
     private var detectionButton: TextView? = null
     private var referenceButton: TextView? = null
@@ -200,6 +201,7 @@ class RallyService : AccessibilityService() {
             setOnClickListener {
                 if (targetAutoArmed) {
                     targetAutoArmed = false
+                    mainHandler.removeCallbacks(targetProbeRunnable)
                     targetAutoMatches = 0
                     text = "AUTO TARGET TEST: OFF"
                     status?.text = "Auto Target test cancelled"
@@ -212,7 +214,8 @@ class RallyService : AccessibilityService() {
                     detectionButton?.text = "DETECT: ON"
                     text = "AUTO TARGET: ARMED (ONE DEPLOY)"
                     status?.text = "Will send one real Target deployment on confirmed match"
-                    probeFormation("target-test-armed")
+                    mainHandler.removeCallbacks(targetProbeRunnable)
+                    mainHandler.postDelayed(targetProbeRunnable, 550L)
                 }
             }
         }
@@ -550,10 +553,18 @@ class RallyService : AccessibilityService() {
         }
     }
 
+    private fun scheduleTargetProbe(delayMs: Long = 550L) {
+        mainHandler.removeCallbacks(targetProbeRunnable)
+        if (targetAutoArmed) mainHandler.postDelayed(targetProbeRunnable, delayMs.coerceAtLeast(50L))
+    }
+
     private fun probeFormation(trigger: String) {
         if (!detectionArmed || Build.VERSION.SDK_INT < Build.VERSION_CODES.R || screenshotInFlight) return
         val now = SystemClock.elapsedRealtime()
-        if (now - lastProbeMs < 80L) return
+        if (now - lastProbeMs < 550L) {
+            if (targetAutoArmed) scheduleTargetProbe(550L - (now - lastProbeMs))
+            return
+        }
         lastProbeMs = now
         val root = rootInActiveWindow
         val gameActive = root?.packageName?.toString() == "com.gof.global"
@@ -601,23 +612,24 @@ class RallyService : AccessibilityService() {
                                     targetAutoMatches++
                                     if (targetAutoMatches >= 2) {
                                         targetAutoArmed = false
+                                        mainHandler.removeCallbacks(targetProbeRunnable)
                                         targetAutoMatches = 0
                                         targetAutoButton?.text = "AUTO TARGET TEST: OFF"
                                         status?.text = "Target confirmed; deploying F$selected"
                                         selectAndDeploy()
                                     } else {
-                                        mainHandler.postDelayed({
-                                            if (targetAutoArmed) probeFormation("confirm-target")
-                                        }, 100L)
+                                        scheduleTargetProbe()
                                     }
                                 } else {
                                     targetAutoMatches = 0
+                                    scheduleTargetProbe()
                                 }
                             }
                             Log.i("WosFastRally", "v0.6 trigger=${trigger} screenshotMs=${elapsed} titleAccessible=${titleExposed} labels=${labels.size}")
                         } catch (e: Exception) {
                             status?.text = "Detection error: ${e.javaClass.simpleName}"
                             Log.e("WosFastRally", "Detection screenshot failed", e)
+                            scheduleTargetProbe()
                         } finally {
                             buffer.close()
                             screenshotInFlight = false
@@ -627,12 +639,15 @@ class RallyService : AccessibilityService() {
                         screenshotInFlight = false
                         status?.text = "Screenshot failed (${errorCode}); title accessible: ${titleExposed}"
                         Log.w("WosFastRally", "Screenshot failed code=${errorCode}")
+                        // Error 3: screenshot interval too short; retry after cooldown.
+                        scheduleTargetProbe(if (errorCode == 3) 800L else 550L)
                     }
                 })
         } catch (e: Exception) {
             screenshotInFlight = false
             status?.text = "Screenshot unavailable: ${e.javaClass.simpleName}"
             Log.w("WosFastRally", "Screenshot unavailable", e)
+            scheduleTargetProbe(800L)
         }
     }
 
@@ -663,6 +678,7 @@ class RallyService : AccessibilityService() {
         referenceButton = null
         targetReferenceButton = null
         detectionArmed = false
+        mainHandler.removeCallbacks(targetProbeRunnable)
         targetAutoArmed = false
         targetAutoButton = null
     }
