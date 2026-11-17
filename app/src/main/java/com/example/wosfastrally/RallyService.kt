@@ -21,7 +21,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import kotlin.math.roundToInt
 
-/** v0.3.1: package diagnostics. Gestures fail closed until a game package is confirmed. */
+/** v0.3.2: confirm com.gof.global before manual preset test. No Deploy. */
 class RallyService : AccessibilityService() {
     private var wm: WindowManager? = null
     private var panel: LinearLayout? = null
@@ -170,10 +170,9 @@ class RallyService : AccessibilityService() {
         if (testing) return
         // Fail closed until the game's actual package has been observed and confirmed.
         val packages = detectedPackages()
-        val gamePackage = getSharedPreferences("config", MODE_PRIVATE)
-            .getString("confirmedGamePackage", null)
-        if (gamePackage.isNullOrBlank() || gamePackage !in packages) {
-            status?.text = "No confirmed game package; tap SHOW detected packages"
+        val gamePackage = "com.gof.global"
+        if (gamePackage !in packages) {
+            status?.text = "WOS ($gamePackage) not detected; no tap sent"
             return
         }
         val display = resources.displayMetrics
