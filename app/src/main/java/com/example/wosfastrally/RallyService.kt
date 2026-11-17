@@ -41,6 +41,7 @@ class RallyService : AccessibilityService() {
     private var referenceButton: TextView? = null
     private var referencePixels: IntArray? = null
     private var targetPixels: IntArray? = null
+    private var referenceCaptureInFlight = false
     private var targetReferenceButton: TextView? = null
     private var lastMatchScore = 0f
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -372,15 +373,21 @@ class RallyService : AccessibilityService() {
     // Fixed-size normalized crop of the top-left title, excluding the back arrow.
     // A reference must be captured on this device on the actual Deploy-title screen.
     private fun titleSamples(bitmap: android.graphics.Bitmap): IntArray {
+        val readable = if (bitmap.config == android.graphics.Bitmap.Config.HARDWARE)
+            bitmap.copy(android.graphics.Bitmap.Config.ARGB_8888, false)
+                ?: throw IllegalStateException("Cannot copy screenshot")
+        else bitmap
+        try {
         val result = IntArray(32 * 12)
         for (y in 0 until 12) for (x in 0 until 32) {
-            val px = ((0.125f + (x + 0.5f) / 32f * 0.29f) * bitmap.width)
-                .toInt().coerceIn(0, bitmap.width - 1)
-            val py = ((0.039f + (y + 0.5f) / 12f * 0.047f) * bitmap.height)
-                .toInt().coerceIn(0, bitmap.height - 1)
-            result[y * 32 + x] = bitmap.getPixel(px, py) and 0x00ffffff
+            val px = ((0.125f + (x + 0.5f) / 32f * 0.29f) * readable.width)
+                .toInt().coerceIn(0, readable.width - 1)
+            val py = ((0.039f + (y + 0.5f) / 12f * 0.047f) * readable.height)
+                .toInt().coerceIn(0, readable.height - 1)
+            result[y * 32 + x] = readable.getPixel(px, py) and 0x00ffffff
         }
         return result
+        } finally { if (readable !== bitmap) readable.recycle() }
     }
 
     private fun compareTitle(reference: IntArray, current: IntArray): Float {
@@ -424,11 +431,16 @@ class RallyService : AccessibilityService() {
     }
 
     private fun captureTargetReference() {
+        if (referenceCaptureInFlight) {
+            status?.text = "Reference capture already in progress"
+            return
+        }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R ||
             rootInActiveWindow?.packageName?.toString() != "com.gof.global") {
             status?.text = "Open WOS Target screen first"
             return
         }
+        referenceCaptureInFlight = true
         try {
             takeScreenshot(android.view.Display.DEFAULT_DISPLAY, mainExecutor,
                 object : TakeScreenshotCallback {
@@ -446,13 +458,21 @@ class RallyService : AccessibilityService() {
                             getSharedPreferences("config", MODE_PRIVATE).edit()
                                 .putString("targetTitleReference", pixels.joinToString(",")).apply()
                             status?.text = "Target reference saved; test other screens with DETECT ON"
-                        } finally { result.hardwareBuffer.close() }
+                        } catch (e: Exception) {
+                            status?.text = "Target capture error: ${e.javaClass.simpleName}"
+                            Log.e("WosFastRally", "Target capture failed", e)
+                        } finally {
+                            result.hardwareBuffer.close()
+                            referenceCaptureInFlight = false
+                        }
                     }
                     override fun onFailure(errorCode: Int) {
+                        referenceCaptureInFlight = false
                         status?.text = "Target screenshot failed: $errorCode"
                     }
                 })
         } catch (e: Exception) {
+            referenceCaptureInFlight = false
             status?.text = "Target reference failed: ${e.javaClass.simpleName}"
         }
     }
@@ -479,6 +499,9 @@ class RallyService : AccessibilityService() {
                             getSharedPreferences("config", MODE_PRIVATE).edit()
                                 .putString("deployTitleReference", pixels.joinToString(",")).apply()
                             status?.text = "Reference saved (confirm title was Deploy)"
+                        } catch (e: Exception) {
+                            status?.text = "Reference capture error: ${e.javaClass.simpleName}"
+                            Log.e("WosFastRally", "Deploy capture failed", e)
                         } finally { result.hardwareBuffer.close() }
                     }
                     override fun onFailure(errorCode: Int) {
@@ -537,6 +560,9 @@ class RallyService : AccessibilityService() {
                                 (score?.let { "${(it * 100).toInt()}%" } ?: "no ref")
                             // No gestures: a high similarity score alone is not validated screen identity.
                             Log.i("WosFastRally", "v0.6 trigger=${trigger} screenshotMs=${elapsed} titleAccessible=${titleExposed} labels=${labels.size}")
+                        } catch (e: Exception) {
+                            status?.text = "Detection error: ${e.javaClass.simpleName}"
+                            Log.e("WosFastRally", "Detection screenshot failed", e)
                         } finally { buffer.close() }
                     }
                     override fun onFailure(errorCode: Int) {
