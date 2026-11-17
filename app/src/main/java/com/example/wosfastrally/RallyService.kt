@@ -39,7 +39,6 @@ class RallyService : AccessibilityService() {
     private var targetAutoArmed = false
     private var targetAutoButton: TextView? = null
     private var targetAutoMatches = 0
-    private var lastGameEventNs = 0L
     private var latencyReport: TextView? = null
     private var screenshotInFlight = false
     private val targetRetry = Runnable { if (targetAutoArmed) probeFormation("target-retry") }
@@ -205,7 +204,7 @@ class RallyService : AccessibilityService() {
                     targetAutoArmed = false
                     mainHandler.removeCallbacks(targetRetry)
                     targetAutoMatches = 0
-                    text = "AUTO TARGET TEST: OFF"
+                    text = "AUTO DEPLOY TEST: OFF"
                     status?.text = "Auto Deploy test cancelled"
                 } else if (referencePixels == null) {
                     status?.text = "Save a Deploy reference first"
@@ -354,7 +353,7 @@ class RallyService : AccessibilityService() {
         }
     }
 
-    private data class DeployTiming(val screenshotStartNs: Long, val screenshotEndNs: Long, val matchEndNs: Long, val eventNs: Long)
+    private data class DeployTiming(val screenshotStartNs: Long, val screenshotEndNs: Long, val matchEndNs: Long)
     private fun ms(a: Long, b: Long) = (b - a).coerceAtLeast(0L) / 1_000_000L
     private fun selectAndDeploy(timing: DeployTiming? = null) {
         if (testing) return
@@ -392,9 +391,7 @@ class RallyService : AccessibilityService() {
                                 " | Select ${ms(selectStartNs, selectDoneNs)}ms" +
                                 " | Wait ${ms(selectDoneNs, deployStartNs)}ms" +
                                 " | Deploy ${ms(deployStartNs, doneNs)}ms" +
-                                " | Total ${ms(timing.screenshotStartNs, doneNs)}ms" +
-                                (if (timing.eventNs > 0L && timing.eventNs <= timing.screenshotStartNs)
-                                    " | Event→done ${ms(timing.eventNs, doneNs)}ms" else "")
+                                " | Total ${ms(timing.screenshotStartNs, doneNs)}ms"
                             latencyReport?.text = report
                             Log.i("WosFastRally", "LATENCY $report")
                         }
@@ -640,10 +637,10 @@ class RallyService : AccessibilityService() {
                                 if (score != null && score >= 0.96f) {
                                     targetAutoArmed = false
                                     mainHandler.removeCallbacks(targetRetry)
-                                    targetAutoButton?.text = "AUTO TARGET TEST: OFF"
+                                    targetAutoButton?.text = "AUTO DEPLOY TEST: OFF"
                                     status?.text = "Deploy ${(score * 100).toInt()}%; deploying F$selected"
                                     selectAndDeploy(DeployTiming(started, screenshotDoneNs,
-                                        SystemClock.elapsedRealtimeNanos(), lastGameEventNs))
+                                        SystemClock.elapsedRealtimeNanos()))
                                 } else {
                                     scheduleTargetRetry()
                                 }
@@ -679,7 +676,6 @@ class RallyService : AccessibilityService() {
         if (pkg == "com.gof.global" &&
             (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
              event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)) {
-            lastGameEventNs = SystemClock.elapsedRealtimeNanos()
         }
         if (detectionArmed && pkg == "com.gof.global" &&
             (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
