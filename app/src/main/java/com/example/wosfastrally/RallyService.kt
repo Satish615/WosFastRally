@@ -66,8 +66,11 @@ class RallyService : AccessibilityService() {
         collapsed = prefs.getBoolean("collapsed", false)
         detectionArmed = false
         // Old Deploy reference was accidentally captured on Target. Invalidate it.
-        prefs.edit().remove("deployTitleReference").apply()
-        referencePixels = null
+        if (!prefs.getBoolean("invalidDeployReferenceClearedV12", false)) {
+            prefs.edit().remove("deployTitleReference")
+                .putBoolean("invalidDeployReferenceClearedV12", true).apply()
+        }
+        referencePixels = loadReference()
         targetPixels = loadTargetReference()
         if (!Settings.canDrawOverlays(this)) {
             Log.w("WosFastRally", "Overlay permission missing")
