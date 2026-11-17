@@ -14,8 +14,8 @@ class MainActivity : Activity() {
   val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(28, 28, 28, 28) }
   val scroll = ScrollView(this); scroll.addView(layout); setContentView(scroll)
   fun label(t: String) { layout.addView(TextView(this).apply { text=t; textSize=16f; setPadding(0,12,0,8) }) }
-  label("WOS Fast Rally — calibration (fractions of full screen 0.0–1.0)")
-  label("From video: + buttons roughly x=.89, y=.26/.51/.77; preset icon x=.19 y=.09; Deploy x=.77 y=.95. VERIFY ON DEVICE.")
+  label("WOS Fast Rally v0.2 — formation selector (dry run)")
+  label("Select F5, F6, or F7 from the floating panel. Drag using its top handle. No gameplay taps are sent in v0.2. Legacy coordinates below are retained for compatibility but are not used by the selector.")
   val values = linkedMapOf("row1x" to .89f,"row1y" to .26f,"row2x" to .89f,"row2y" to .51f,"row3x" to .89f,"row3y" to .77f,"presetx" to .19f,"presety" to .09f,"deployx" to .77f,"deployy" to .95f)
   val edits = mutableMapOf<String,EditText>()
   for ((key,default) in values) { val line=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER_VERTICAL }
@@ -32,6 +32,6 @@ class MainActivity : Activity() {
   overlay.setOnClickListener { startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,Uri.parse("package:$packageName"))) }
   val accessibility=Button(this).apply { text="Enable accessibility service" }; layout.addView(accessibility)
   accessibility.setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
-  label("Overlay appears when accessibility service is enabled and overlay permission granted. Long press J1/J2/J3 to drag the panel. Tap a button to run. Fail-closed if text-based formation/deploy verification is unavailable.")
+  label("Overlay requires accessibility and overlay permissions. Drag the top handle; tap F5/F6/F7 to change selection. Green means active. No automatic formation or Deploy taps in v0.2.")
  }
 }
