@@ -352,7 +352,7 @@ class RallyService : AccessibilityService() {
                         testing = false
                         status?.text = "Deploy gesture cancelled/rejected"
                     })
-                }, 100L)
+                }, 200L)
             }, onFailure = {
                 testing = false
                 status?.text = "Formation gesture failed; Deploy skipped"
